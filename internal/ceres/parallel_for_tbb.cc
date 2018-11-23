@@ -1,5 +1,5 @@
 // Ceres Solver - A fast non-linear least squares minimizer
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2018 Google Inc. All rights reserved.
 // http://ceres-solver.org/
 //
 // Redistribution and use in source and binary forms, with or without
@@ -26,80 +26,72 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 //
-// Author: sameeragarwal@google.com (Sameer Agarwal)
+// Author: vitus@google.com (Michael Vitus)
 
-#include <string>
-
-#include "ceres/internal/config.h"
-
-#include "Eigen/Core"
-#ifdef CERES_USE_TBB
-#include "tbb/tbb_stddef.h"
-#endif  // CERES_USE_TBB
+// This include must come before any #ifndef check on Ceres compile options.
 #include "ceres/internal/port.h"
-#include "ceres/solver_utils.h"
-#include "ceres/version.h"
+
+#ifdef CERES_USE_TBB
+
+#include "ceres/parallel_for.h"
+
+#include <tbb/parallel_for.h>
+#include <tbb/task_arena.h>
+#include "tbb/task_scheduler_init.h"
+
+#include "ceres/scoped_thread_token.h"
+#include "ceres/thread_token_provider.h"
+#include "glog/logging.h"
 
 namespace ceres {
 namespace internal {
 
-#define CERES_EIGEN_VERSION                                          \
-  CERES_TO_STRING(EIGEN_WORLD_VERSION) "."                           \
-  CERES_TO_STRING(EIGEN_MAJOR_VERSION) "."                           \
-  CERES_TO_STRING(EIGEN_MINOR_VERSION)
-
-#define CERES_TBB_VERSION                          \
-  CERES_TO_STRING(TBB_VERSION_MAJOR) "."           \
-  CERES_TO_STRING(TBB_VERSION_MINOR)
-
-std::string VersionString() {
-  std::string value = std::string(CERES_VERSION_STRING);
-  value += "-eigen-(" + std::string(CERES_EIGEN_VERSION) + ")";
-
-#ifdef CERES_NO_LAPACK
-  value += "-no_lapack";
-#else
-  value += "-lapack";
-#endif
-
-#ifndef CERES_NO_SUITESPARSE
-  value += "-suitesparse-(" + std::string(CERES_SUITESPARSE_VERSION) + ")";
-#endif
-
-#ifndef CERES_NO_CXSPARSE
-  value += "-cxsparse-(" + std::string(CERES_CXSPARSE_VERSION) + ")";
-#endif
-
-#ifndef CERES_NO_ACCELERATE_SPARSE
-  value += "-acceleratesparse";
-#endif
-
-#ifdef CERES_USE_EIGEN_SPARSE
-  value += "-eigensparse";
-#endif
-
-#ifdef CERES_RESTRUCT_SCHUR_SPECIALIZATIONS
-  value += "-no_schur_specializations";
-#endif
-
-#ifdef CERES_USE_OPENMP
-  value += "-openmp";
-#else
-  value += "-no_openmp";
-#endif
-
-#ifdef CERES_USE_TBB
-  value += "-tbb-(" + std::string(CERES_TBB_VERSION) + ")";
-#else
-  value += "-no_tbb";
-#endif
-
-#ifdef CERES_NO_CUSTOM_BLAS
-  value += "-no_custom_blas";
-#endif
-
-  return value;
+int MaxNumThreadsAvailable() {
+  return tbb::task_scheduler_init::default_num_threads();
 }
+
+void ParallelFor(ContextImpl* context,
+                 int start,
+                 int end,
+                 int num_threads,
+                 const std::function<void(int)>& function) {
+  CHECK_GT(num_threads, 0);
+  CHECK(context != NULL);
+  if (end <= start) {
+    return;
+  }
+
+  // Fast path for when it is single threaded.
+  if (num_threads == 1) {
+    for (int i = start; i < end; ++i) {
+      function(i);
+    }
+    return;
+  }
+
+  tbb::task_arena task_arena(num_threads);
+  task_arena.execute([&]{
+      tbb::parallel_for(start, end, function);
+    });
+}
+
+void ParallelFor(ContextImpl* context,
+                 int start,
+                 int end,
+                 int num_threads,
+                 const std::function<void(int thread_id, int i)>& function) {
+  CHECK(context != NULL);
+
+  ThreadTokenProvider thread_token_provider(num_threads);
+  ParallelFor(context, start, end, num_threads, [&](int i) {
+    const ScopedThreadToken scoped_thread_token(&thread_token_provider);
+    const int thread_id = scoped_thread_token.token();
+    function(thread_id, i);
+  });
+}
+
 
 }  // namespace internal
 }  // namespace ceres
+
+#endif // CERES_USE_TBB

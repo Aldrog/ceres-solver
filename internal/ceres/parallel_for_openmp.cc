@@ -31,7 +31,7 @@
 // This include must come before any #ifndef check on Ceres compile options.
 #include "ceres/internal/port.h"
 
-#if defined(CERES_USE_OPENMP)
+#if !(defined(CERES_USE_TBB) || defined(CERES_USE_CXX11_THREADS))
 
 #include "ceres/parallel_for.h"
 
@@ -85,4 +85,4 @@ void ParallelFor(ContextImpl* context,
 }  // namespace internal
 }  // namespace ceres
 
-#endif  // defined(CERES_USE_OPENMP)
+#endif  // !(defined(CERES_USE_TBB) || defined(CERES_USE_CXX11_THREADS))
